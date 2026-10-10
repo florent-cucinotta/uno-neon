@@ -5,6 +5,8 @@ export const COLORS = ['r', 'y', 'g', 'b'];
 export const CNAME = { r: 'Rouge', y: 'Jaune', g: 'Vert', b: 'Bleu' };
 export const MAXP = 8;
 const BOTNAMES = ['Ada', 'Max', 'Léa', 'Tom', 'Zoé', 'Hugo', 'Inès', 'Noé'];
+export const SKINS = ['robot', 'cat', 'punk', 'astro', 'pirate', 'dj', 'alien', 'ninja', 'ghost', 'king'];
+const cleanSkin = k => (SKINS.includes(k) ? k : 'robot');
 
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 function newDeck() {
@@ -30,7 +32,7 @@ const clampLvl = l => Math.max(0, Math.min(99, Math.floor(+l || 0)));
 
 export function newState(code, host) {
   const now = Date.now();
-  return { code, status: 'lobby', hostId: host.id, players: [{ id: host.id, name: cleanName(host.name), bot: false, lvl: clampLvl(host.lvl), key: host.key }],
+  return { code, status: 'lobby', hostId: host.id, players: [{ id: host.id, name: cleanName(host.name), bot: false, lvl: clampLvl(host.lvl), skin: cleanSkin(host.skin), key: host.key }],
     hands: {}, deck: [], discard: [], color: 'r', turn: 0, dir: 1, drew: false, unoCalled: {}, vulnerable: null, winner: null,
     wins: {}, played: {}, log: [], round: 0, v: 1, updated: now, created: now };
 }
@@ -42,7 +44,10 @@ export function isHost(s, pid) {
 function botPlayer(s) {
   const used = new Set(s.players.map(p => p.name));
   const name = BOTNAMES.map(b => 'Bot ' + b).find(b => !used.has(b)) || 'Bot ' + (s.players.length + 1);
-  return { id: 'bot_' + Math.random().toString(36).slice(2, 9), name, bot: true, lvl: 0 };
+  const taken = new Set(s.players.map(p => p.skin));
+  const free = SKINS.filter(k => !taken.has(k));
+  const pool = free.length ? free : SKINS;
+  return { id: 'bot_' + Math.random().toString(36).slice(2, 9), name, bot: true, lvl: 0, skin: pool[Math.floor(Math.random() * pool.length)] };
 }
 
 function drawCards(s, pid, n) {
@@ -60,7 +65,7 @@ export function deal(s) {
   const i = d.findIndex(c => c[0] !== 'w' && isNum(c)); const t = d.splice(i, 1)[0];
   s.deck = d; s.discard = [t]; s.color = t[0]; s.dir = 1; s.turn = Math.floor(Math.random() * s.players.length);
   s.drew = false; s.unoCalled = {}; s.vulnerable = null; s.winner = null; s.status = 'playing'; s.round = (s.round || 0) + 1;
-  s.wins = s.wins || {}; s.played = {};
+  s.wins = s.wins || {}; s.played = {}; s.lastBy = null;
   s.log = []; addLog(s, 'Manche ' + s.round + ' : ' + s.players[s.turn].name + ' commence.');
 }
 
@@ -72,7 +77,7 @@ function play(s, pid, card, color) {
   if (s.drew && card !== h[h.length - 1]) return false;
   if (card[0] === 'w' && !COLORS.includes(color)) return false;
   if (s.vulnerable && s.vulnerable !== pid) s.vulnerable = null;
-  h.splice(i, 1); s.discard.push(card); s.color = card[0] === 'w' ? color : card[0]; s.drew = false;
+  h.splice(i, 1); s.discard.push(card); s.color = card[0] === 'w' ? color : card[0]; s.drew = false; s.lastBy = pid;
   s.played = s.played || {}; s.played[pid] = (s.played[pid] || 0) + 1;
   let msg = p.name + ' joue ' + cardLabel(card) + (card[0] === 'w' ? ' → ' + CNAME[color] : '');
   if (h.length === 0) { s.status = 'over'; s.winner = pid; s.vulnerable = null; s.wins[pid] = (s.wins[pid] || 0) + 1; addLog(s, msg); addLog(s, p.name + ' gagne la manche !'); return; }
@@ -149,10 +154,10 @@ export function applyAct(s, pid, a) {
   switch (a.type) {
     case 'join': {
       const p = s.players.find(q => q.id === pid);
-      if (p) { if (p.bot && s.status !== 'playing') { p.bot = false; p.name = cleanName(a.name); p.lvl = clampLvl(a.lvl); return; } return false; }
+      if (p) { if (p.bot && s.status !== 'playing') { p.bot = false; p.name = cleanName(a.name); p.lvl = clampLvl(a.lvl); p.skin = cleanSkin(a.skin); return; } return false; }
       if (s.status === 'playing') return 'Partie en cours : tu pourras rejoindre à la fin de la manche.';
       if (s.players.length >= MAXP) return 'Cette table est complète.';
-      s.players.push({ id: pid, name: cleanName(a.name), bot: false, lvl: clampLvl(a.lvl), key: a.key });
+      s.players.push({ id: pid, name: cleanName(a.name), bot: false, lvl: clampLvl(a.lvl), skin: cleanSkin(a.skin), key: a.key });
       return;
     }
     case 'play': return play(s, pid, a.card, a.color);
@@ -174,7 +179,8 @@ export function applyAct(s, pid, a) {
 export function view(s, pid) {
   return {
     code: s.code, status: s.status, hostId: s.hostId,
-    players: s.players.map(p => ({ id: p.id, name: p.name, bot: !!p.bot, lvl: p.lvl || 0, n: (s.hands[p.id] || []).length })),
+    players: s.players.map(p => ({ id: p.id, name: p.name, bot: !!p.bot, lvl: p.lvl || 0, skin: p.skin || 'robot', n: (s.hands[p.id] || []).length })),
+    lastBy: s.lastBy || null,
     hand: [...(s.hands[pid] || [])], top: s.discard.slice(-3), discardN: s.discard.length, deckN: s.deck.length,
     color: s.color, turn: s.turn, dir: s.dir, drew: s.drew, unoCalled: { ...s.unoCalled }, vulnerable: s.vulnerable,
     winner: s.winner, wins: { ...s.wins }, played: { ...(s.played || {}) }, log: [...(s.log || [])],
